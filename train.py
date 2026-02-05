@@ -1,16 +1,15 @@
-from rfdetr import RFDETRMedium
+from rfdetr import RFDETRBase
 
-# Create a model with a pretrained COCO backbone
-# and specify number of classes = 1 (just basketball)
-model = RFDETRMedium()
+dataset = "data/basketball2k"
 
-# Train on your dataset
+model = RFDETRBase()
+
 model.train(
-    dataset_dir="data/basketball",  # expects train/valid/test subdirs
-    epochs=50,
-    batch_size=2,
-    lr=1e-4
+    dataset_dir = dataset,
+    epochs = 16, 
+    batch_size = 1, 
+    grad_accum_steps = 16,
+    lr = 1e-4,
+    output_dir = "model2k",
+    #resume="output/checkpoint.pth",
 )
-
-# Save the fine‑tuned model weights
-model.save("models/basketball-rfdetr.pth")

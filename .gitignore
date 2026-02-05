@@ -11,3 +11,10 @@ Thumbs.db
 
 # data
 data/
+
+# models
+models/
+*.pth
+
+# cropped images
+saved_frames/
