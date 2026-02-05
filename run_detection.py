@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 import tkinter as tk
 from tkinter import filedialog
+import time
 
 import supervision as sv
 from rfdetr import RFDETRBase
@@ -102,9 +103,14 @@ elif ext in VIDEO_EXTS:
         smart_position=True,
     )
 
+    fps = 0.0
+    alpha = 0.1  # smoothing factor
+
     print("Press ESC to exit")
 
     while True:
+        start_time = time.perf_counter()
+
         ret, frame = cap.read()
         if not ret:
             break
@@ -112,7 +118,24 @@ elif ext in VIDEO_EXTS:
         image_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         annotated_frame = run_detection(image_pil, bbox_annotator, label_annotator)
 
-        cv2.namedWindow("RF-DETR Detection (Video)", cv2.WINDOW_NORMAL)
+        # ---- FPS calculation ----
+        end_time = time.perf_counter()
+        frame_time = end_time - start_time
+        current_fps = 1.0 / frame_time if frame_time > 0 else 0.0
+        fps = (1 - alpha) * fps + alpha * current_fps
+
+        # ---- Draw FPS ----
+        cv2.putText(
+            annotated_frame,
+            f"FPS: {fps:.1f}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
         cv2.imshow("RF-DETR Detection (Video)", annotated_frame)
         if cv2.waitKey(1) & 0xFF == 27:
             break
