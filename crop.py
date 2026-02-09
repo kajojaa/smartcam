@@ -4,10 +4,10 @@ import os
 # -------------------------
 # CONFIG
 # -------------------------
-VIDEO_PATH = "input.mov"
+VIDEO_PATH = "data/video/video.mov"
 OUTPUT_DIR = "saved_frames"
-CROP_W = 768	
-CROP_H = 768
+CROP_W = 416	
+CROP_H = 416
 JPEG_QUALITY = 95
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -17,7 +17,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # -------------------------
 crop_x, crop_y = 100, 100
 dragging = False
-saved_index = 0
+saved_index = 190
 frame_index = 0
 frame = None
 redraw = True

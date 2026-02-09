@@ -11,7 +11,7 @@ from rfdetr import RFDETRBase
 
 # ---------------- CONFIG ----------------
 MODEL_PATH = "models/basketball2k_01.pth"
-CONF_THRESHOLD = 0.5
+CONF_THRESHOLD = 0.3
 
 # -------- File Picker --------
 root = tk.Tk()

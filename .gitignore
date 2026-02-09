@@ -15,6 +15,9 @@ data/
 # models
 models/
 *.pth
+*.onnx
 
 # cropped images
 saved_frames/
+
+
