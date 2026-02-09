@@ -4,10 +4,11 @@ import tensorrt as trt
 import time
 
 ENGINE_PATH = "basketball.trt"
-VIDEO_PATH = "input1.mov"
+VIDEO_PATH = "input1.MOV"
 CONF_THRESHOLD = 0.3
 
 CLASS_NAMES = [
+    "basketballs",
     "basketball",
     "rim",
     "sports ball",
