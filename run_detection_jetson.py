@@ -1,131 +1,120 @@
+import os
 import cv2
 import numpy as np
-import tensorrt as trt
 import time
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
+import supervision as sv
 
-ENGINE_PATH = "basketball.trt"
-VIDEO_PATH = "input1.MOV"
+# ---------------- CONFIG ----------------
+ENGINE_PATH = "basketball.trt"     # TensorRT engine path
+VIDEO_FILE = "input1.MOV"       # video file in the same directory as script
 CONF_THRESHOLD = 0.3
+CLASS_NAMES = ["basketballs", "basketball", "rim", "sports ball"]
 
-CLASS_NAMES = [
-    "basketballs",
-    "basketball",
-    "rim",
-    "sports ball",
-]
+# ---------------- CHECK VIDEO FILE ----------------
+if not os.path.exists(VIDEO_FILE):
+    raise RuntimeError(f"Video file not found: {VIDEO_FILE}")
 
+# ---------------- LOAD TENSORRT ENGINE ----------------
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
-# ---------------- Load engine ----------------
-def load_engine(path):
-    with open(path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
+def load_engine(trt_file_path):
+    with open(trt_file_path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
         return runtime.deserialize_cuda_engine(f.read())
 
 engine = load_engine(ENGINE_PATH)
 context = engine.create_execution_context()
 
-# ---------------- Tensor info ----------------
-input_name = None
-output_name = None
-
-for i in range(engine.num_io_tensors):
-    name = engine.get_tensor_name(i)
-    mode = engine.get_tensor_mode(name)
-
-    if mode == trt.TensorIOMode.INPUT:
-        input_name = name
+# ---------------- ALLOCATE BUFFERS ----------------
+inputs, outputs, bindings = [], [], []
+for binding in engine:
+    size = trt.volume(engine.get_binding_shape(binding)) * engine.max_batch_size
+    dtype = trt.nptype(engine.get_binding_dtype(binding))
+    host_mem = cuda.pagelocked_empty(size, dtype)
+    device_mem = cuda.mem_alloc(host_mem.nbytes)
+    bindings.append(int(device_mem))
+    if engine.binding_is_input(binding):
+        inputs.append({"host": host_mem, "device": device_mem})
     else:
-        output_name = name
+        outputs.append({"host": host_mem, "device": device_mem})
 
-assert input_name and output_name
+stream = cuda.Stream()
 
-input_shape = context.get_tensor_shape(input_name)
-output_shape = context.get_tensor_shape(output_name)
+# ---------------- INFERENCE ----------------
+def infer(frame):
+    # Convert BGR → RGB, CHW, normalize
+    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img_input = np.transpose(img, (2, 0, 1))[np.newaxis, :, :, :]  # (1,3,H,W)
+    
+    np.copyto(inputs[0]["host"], img_input.ravel())
+    cuda.memcpy_htod_async(inputs[0]["device"], inputs[0]["host"], stream)
+    context.execute_async_v2(bindings=bindings, stream_handle=stream.handle)
+    cuda.memcpy_dtoh_async(outputs[0]["host"], outputs[0]["device"], stream)
+    stream.synchronize()
 
-_, _, H, W = input_shape
+    # parse output: N x 6 -> x1,y1,x2,y2,score,class
+    out = outputs[0]["host"].reshape(-1, 6)
+    mask = out[:, 4] >= CONF_THRESHOLD
+    filtered = out[mask]
 
-# ---------------- Buffers (unified memory) ----------------
-input_buffer = np.empty(np.prod(input_shape), dtype=np.float32)
-output_buffer = np.empty(np.prod(output_shape), dtype=np.float32)
+    if len(filtered) == 0:
+        return None
 
-context.set_tensor_address(input_name, input_buffer.ctypes.data)
-context.set_tensor_address(output_name, output_buffer.ctypes.data)
+    xyxy = filtered[:, :4]
+    confidences = filtered[:, 4]
+    class_ids = filtered[:, 5].astype(int)
 
-# ---------------- Video ----------------
-cap = cv2.VideoCapture(VIDEO_PATH)
+    return sv.Detections(xyxy=xyxy, confidence=confidences, class_id=class_ids)
+
+# ---------------- ANNOTATION ----------------
+def annotate(frame, detections):
+    labels = [
+        f"{CLASS_NAMES[cid]} {conf:.2f}"
+        for cid, conf in zip(detections.class_id.tolist(), detections.confidence.tolist())
+    ]
+    text_scale = sv.calculate_optimal_text_scale(frame.shape[:2][::-1])
+    thickness = sv.calculate_optimal_line_thickness(frame.shape[:2][::-1])
+    bbox_annotator = sv.BoxAnnotator(thickness=thickness)
+    label_annotator = sv.LabelAnnotator(
+        text_color=sv.Color.BLACK,
+        text_scale=text_scale,
+        text_thickness=thickness,
+        smart_position=True
+    )
+
+    annotated = bbox_annotator.annotate(frame.copy(), detections)
+    annotated = label_annotator.annotate(annotated, detections, labels)
+    return annotated
+
+# ---------------- RUN ----------------
+cap = cv2.VideoCapture(VIDEO_FILE)
 if not cap.isOpened():
-    raise RuntimeError("Failed to open video")
+    raise RuntimeError(f"Could not open video {VIDEO_FILE}")
 
 fps = 0.0
 alpha = 0.1
-
-print("Running TensorRT inference — ESC to quit")
+print("Press ESC to exit")
 
 while True:
-    start = time.perf_counter()
-
+    start_time = time.perf_counter()
     ret, frame = cap.read()
     if not ret:
         break
 
-    # Resize to model resolution
-    frame_resized = cv2.resize(frame, (W, H))
+    detections = infer(frame)
+    annotated_frame = annotate(frame, detections) if detections is not None else frame
 
-    # BGR → RGB
-    img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+    # FPS calculation
+    end_time = time.perf_counter()
+    current_fps = 1.0 / (end_time - start_time)
+    fps = (1 - alpha) * fps + alpha * current_fps
+    cv2.putText(annotated_frame, f"FPS: {fps:.1f}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
 
-    # HWC → CHW, normalize
-    img = img.transpose(2, 0, 1).astype(np.float32) / 255.0
-    input_buffer[:] = img.ravel()
-
-    # Inference
-    context.execute_async_v3(0)
-
-    detections = output_buffer.reshape(-1, 6)
-
-    print(detections[:5])
-
-    # Draw boxes
-    for det in detections:
-        cx, cy, w, h, score, cls_id = det
-        if score < CONF_THRESHOLD:
-            continue
-
-        # Convert normalized cx,cy,w,h → pixel corners
-        cx *= frame.shape[1]
-        cy *= frame.shape[0]
-        w  *= frame.shape[1]
-        h  *= frame.shape[0]
-
-        x1 = int(cx - w / 2)
-        y1 = int(cy - h / 2)
-        x2 = int(cx + w / 2)
-        y2 = int(cy + h / 2)
-
-        cls_id = int(cls_id)
-        label = CLASS_NAMES[cls_id] if cls_id < len(CLASS_NAMES) else str(cls_id)
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(
-            frame,
-            f"{label} {score:.2f}",
-            (x1, y1 - 5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 255, 0),
-            2,
-        )
-
-    # FPS
-    end = time.perf_counter()
-    curr_fps = 1.0 / (end - start)
-    fps = fps * (1 - alpha) + curr_fps * alpha
-
-    cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-
-    cv2.imshow("RT-DETR TensorRT", frame)
-    if cv2.waitKey(1) == 27:
+    cv2.imshow("RFDETR (TensorRT) Video", annotated_frame)
+    if cv2.waitKey(1) & 0xFF == 27:
         break
 
 cap.release()
