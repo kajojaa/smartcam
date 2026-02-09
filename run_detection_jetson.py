@@ -3,7 +3,6 @@ import numpy as np
 import tensorrt as trt
 import time
 
-# ---------------- CONFIG ----------------
 ENGINE_PATH = "basketball.trt"
 VIDEO_PATH = "input1.mov"
 CONF_THRESHOLD = 0.3
@@ -14,9 +13,9 @@ CLASS_NAMES = [
     "sports ball",
 ]
 
-# ---------------------------------------
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
+# ---------------- Load engine ----------------
 def load_engine(path):
     with open(path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
         return runtime.deserialize_cuda_engine(f.read())
@@ -24,31 +23,34 @@ def load_engine(path):
 engine = load_engine(ENGINE_PATH)
 context = engine.create_execution_context()
 
-# Get input / output info
-input_binding = None
-output_binding = None
+# ---------------- Tensor info ----------------
+input_name = None
+output_name = None
 
-for i in range(engine.num_bindings):
-    if engine.binding_is_input(i):
-        input_binding = i
+for i in range(engine.num_io_tensors):
+    name = engine.get_tensor_name(i)
+    mode = engine.get_tensor_mode(name)
+
+    if mode == trt.TensorIOMode.INPUT:
+        input_name = name
     else:
-        output_binding = i
+        output_name = name
 
-input_shape = context.get_binding_shape(input_binding)
-output_shape = context.get_binding_shape(output_binding)
+assert input_name and output_name
+
+input_shape = context.get_tensor_shape(input_name)
+output_shape = context.get_tensor_shape(output_name)
 
 _, _, H, W = input_shape
 
-# Allocate buffers (Jetson unified memory)
+# ---------------- Buffers (unified memory) ----------------
 input_buffer = np.empty(np.prod(input_shape), dtype=np.float32)
 output_buffer = np.empty(np.prod(output_shape), dtype=np.float32)
 
-bindings = [
-    int(input_buffer.ctypes.data),
-    int(output_buffer.ctypes.data),
-]
+context.set_tensor_address(input_name, input_buffer.ctypes.data)
+context.set_tensor_address(output_name, output_buffer.ctypes.data)
 
-# ---------------------------------------
+# ---------------- Video ----------------
 cap = cv2.VideoCapture(VIDEO_PATH)
 if not cap.isOpened():
     raise RuntimeError("Failed to open video")
@@ -56,7 +58,7 @@ if not cap.isOpened():
 fps = 0.0
 alpha = 0.1
 
-print("Running inference... Press ESC to exit")
+print("Running TensorRT inference — ESC to quit")
 
 while True:
     start = time.perf_counter()
@@ -65,26 +67,24 @@ while True:
     if not ret:
         break
 
-    # Resize to TRT input size
+    # Resize to model resolution
     frame_resized = cv2.resize(frame, (W, H))
 
-    # BGR -> RGB
+    # BGR → RGB
     img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
 
-    # HWC -> CHW, normalize to [0,1]
+    # HWC → CHW, normalize
     img = img.transpose(2, 0, 1).astype(np.float32) / 255.0
-
     input_buffer[:] = img.ravel()
 
-    # Run inference
-    context.execute_v2(bindings)
+    # Inference
+    context.execute_async_v3(0)
 
     detections = output_buffer.reshape(-1, 6)
 
-    # Draw detections
+    # Draw boxes
     for det in detections:
-        x1, y1, x2, y2, score, class_id = det
-
+        x1, y1, x2, y2, score, cls_id = det
         if score < CONF_THRESHOLD:
             continue
 
@@ -93,8 +93,8 @@ while True:
         y1 = int(y1 * frame.shape[0])
         y2 = int(y2 * frame.shape[0])
 
-        cls = int(class_id)
-        label = CLASS_NAMES[cls] if cls < len(CLASS_NAMES) else str(cls)
+        cls_id = int(cls_id)
+        label = CLASS_NAMES[cls_id] if cls_id < len(CLASS_NAMES) else str(cls_id)
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(
@@ -112,15 +112,8 @@ while True:
     curr_fps = 1.0 / (end - start)
     fps = fps * (1 - alpha) + curr_fps * alpha
 
-    cv2.putText(
-        frame,
-        f"FPS: {fps:.1f}",
-        (10, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1.0,
-        (0, 255, 0),
-        2,
-    )
+    cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
     cv2.imshow("RT-DETR TensorRT", frame)
     if cv2.waitKey(1) == 27:
