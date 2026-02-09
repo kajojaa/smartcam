@@ -82,16 +82,24 @@ while True:
 
     detections = output_buffer.reshape(-1, 6)
 
+    print(detections[:5])
+
     # Draw boxes
     for det in detections:
-        x1, y1, x2, y2, score, cls_id = det
+        cx, cy, w, h, score, cls_id = det
         if score < CONF_THRESHOLD:
             continue
 
-        x1 = int(x1 * frame.shape[1])
-        x2 = int(x2 * frame.shape[1])
-        y1 = int(y1 * frame.shape[0])
-        y2 = int(y2 * frame.shape[0])
+        # Convert normalized cx,cy,w,h → pixel corners
+        cx *= frame.shape[1]
+        cy *= frame.shape[0]
+        w  *= frame.shape[1]
+        h  *= frame.shape[0]
+
+        x1 = int(cx - w / 2)
+        y1 = int(cy - h / 2)
+        x2 = int(cx + w / 2)
+        y2 = int(cy + h / 2)
 
         cls_id = int(cls_id)
         label = CLASS_NAMES[cls_id] if cls_id < len(CLASS_NAMES) else str(cls_id)
