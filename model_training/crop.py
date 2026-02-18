@@ -4,10 +4,11 @@ import os
 # -------------------------
 # CONFIG
 # -------------------------
-VIDEO_PATH = "data/video/video.mov"
+VIDEO_PATH = "data/video/sonas2.mov"
 OUTPUT_DIR = "saved_frames"
-CROP_W = 416	
-CROP_H = 416
+INDEX = "son2"
+CROP_W = 640	
+CROP_H = 640
 JPEG_QUALITY = 95
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -17,7 +18,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # -------------------------
 crop_x, crop_y = 100, 100
 dragging = False
-saved_index = 190
+saved_index = 0
 frame_index = 0
 frame = None
 redraw = True
@@ -110,7 +111,7 @@ while True:
 
             out_path = os.path.join(
                 OUTPUT_DIR,
-                f"frame_{saved_index:05d}.jpg"
+                f"{INDEX}_{saved_index:05d}.jpg"
             )
 
             cv2.imwrite(

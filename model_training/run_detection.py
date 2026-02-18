@@ -7,10 +7,10 @@ from tkinter import filedialog
 import time
 
 import supervision as sv
-from rfdetr import RFDETRBase
+from rfdetr import RFDETRSmall
 
 # ---------------- CONFIG ----------------
-MODEL_PATH = "models/basketball2k_01.pth"
+MODEL_PATH = "models/basketball5s.pth"
 CONF_THRESHOLD = 0.3
 
 # -------- File Picker --------
@@ -29,11 +29,11 @@ if not FILE_PATH:
     raise RuntimeError("No file selected")
 
 # -------- Load Model --------
-model = RFDETRBase(pretrain_weights=MODEL_PATH)
+model = RFDETRSmall(pretrain_weights=MODEL_PATH)
 model.optimize_for_inference()
 
 # -------- Load Class Names --------
-CLASS_NAMES = ["basketballs", "basketball", "rim", "sports ball"]
+CLASS_NAMES = ["background", "basketball", "rim"]
 
 
 # -------- Helpers --------
@@ -115,8 +115,19 @@ elif ext in VIDEO_EXTS:
         if not ret:
             break
 
-        image_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        # -------- Resize frame BEFORE detection --------
+        TARGET_WIDTH = 720  # try 640, 512, or even 416 for more speed
+
+        h, w = frame.shape[:2]
+        scale = TARGET_WIDTH / w
+        new_w = TARGET_WIDTH
+        new_h = int(h * scale)
+
+        resized_frame = cv2.resize(frame, (new_w, new_h))
+
+        image_pil = Image.fromarray(cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB))
         annotated_frame = run_detection(image_pil, bbox_annotator, label_annotator)
+
 
         # ---- FPS calculation ----
         end_time = time.perf_counter()
