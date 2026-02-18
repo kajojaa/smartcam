@@ -223,6 +223,9 @@ def main(args):
     source.set_property("device", args[1])
     source.set_property("io-mode", 2)
 
+    queue.set_property("leaky", 2)   # drop old buffers
+    queue.set_property("max-size-buffers", 1)
+
     caps_jpeg.set_property(
         "caps",
         Gst.Caps.from_string(
