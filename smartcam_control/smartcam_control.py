@@ -142,9 +142,9 @@ def main(args):
     if not source:
         sys.stderr.write(" Unable to create Source \n")
 
-    caps_v4l2src = Gst.ElementFactory.make("capsfilter", "v4l2src_caps")
-    if not caps_v4l2src:
-        sys.stderr.write(" Unable to create v4l2src capsfilter \n")
+    # caps_v4l2src = Gst.ElementFactory.make("capsfilter", "v4l2src_caps")
+    # if not caps_v4l2src:
+    #     sys.stderr.write(" Unable to create v4l2src capsfilter \n")
 
 
     print("Creating Video Converter \n")
@@ -160,18 +160,18 @@ def main(args):
 
 
     # videoconvert to make sure a superset of raw formats are supported
-    vidconvsrc = Gst.ElementFactory.make("videoconvert", "convertor_src1")
-    if not vidconvsrc:
-        sys.stderr.write(" Unable to create videoconvert \n")
+    # vidconvsrc = Gst.ElementFactory.make("videoconvert", "convertor_src1")
+    # if not vidconvsrc:
+    #     sys.stderr.write(" Unable to create videoconvert \n")
 
     # nvvideoconvert to convert incoming raw buffers to NVMM Mem (NvBufSurface API)
     nvvidconvsrc = Gst.ElementFactory.make("nvvideoconvert", "convertor_src2")
     if not nvvidconvsrc:
         sys.stderr.write(" Unable to create Nvvideoconvert \n")
 
-    caps_vidconvsrc = Gst.ElementFactory.make("capsfilter", "nvmm_caps")
-    if not caps_vidconvsrc:
-        sys.stderr.write(" Unable to create capsfilter \n")
+    # caps_vidconvsrc = Gst.ElementFactory.make("capsfilter", "nvmm_caps")
+    # if not caps_vidconvsrc:
+    #     sys.stderr.write(" Unable to create capsfilter \n")
 
     # Create nvstreammux instance to form batches from one or more sources.
     streammux = Gst.ElementFactory.make("nvstreammux", "Stream-muxer")
@@ -198,63 +198,103 @@ def main(args):
     # Finally render the osd output
     if platform_info.is_integrated_gpu():
         print("Creating nv3dsink \n")
-        sink = Gst.ElementFactory.make("nv3dsink", "nv3d-sink")
-        if not sink:
+        nv3d_sink = Gst.ElementFactory.make("nv3dsink", "nv3d-sink")
+        if not nv3d_sink:
             sys.stderr.write(" Unable to create nv3dsink \n")
     else:
         if platform_info.is_platform_aarch64():
             print("Creating nv3dsink \n")
-            sink = Gst.ElementFactory.make("nv3dsink", "nv3d-sink")
+            nv3d_sink = Gst.ElementFactory.make("nv3dsink", "nv3d-sink")
         else:
             print("Creating EGLSink \n")
-            sink = Gst.ElementFactory.make("nveglglessink", "nvvideo-renderer")
-        if not sink:
+            nv3d_sink = Gst.ElementFactory.make("nveglglessink", "nvvideo-renderer")
+        if not nv3d_sink:
             sys.stderr.write(" Unable to create egl sink \n")
 
+    jpegparse = Gst.ElementFactory.make("jpegparse", "jpegparse")
+    decoder = Gst.ElementFactory.make("nvv4l2decoder", "decoder")
+    queue = Gst.ElementFactory.make("queue", "queue")
+    caps_jpeg = Gst.ElementFactory.make("capsfilter", "caps_jpeg")
+    caps_nvmm = Gst.ElementFactory.make("capsfilter", "caps_nvmm")
+    caps_bgrx = Gst.ElementFactory.make("capsfilter", "caps_bgrx")
+    fpssink = Gst.ElementFactory.make("fpsdisplaysink", "fpssink")
+
     print("Playing cam %s " %args[1])
-    caps_v4l2src.set_property('caps', Gst.Caps.from_string("video/x-raw, framerate=30/1"))
-    caps_vidconvsrc.set_property('caps', Gst.Caps.from_string("video/x-raw(memory:NVMM)"))
-    source.set_property('device', args[1])
-    streammux.set_property('width', 1920)
-    streammux.set_property('height', 1080)
-    streammux.set_property('batch-size', 1)
-    streammux.set_property('batched-push-timeout', MUXER_BATCH_TIMEOUT_USEC)
-    pgie.set_property('config-file-path', "dstest1_pgie_config.txt")
+    source.set_property("device", args[1])
+    source.set_property("io-mode", 2)
+
+    caps_jpeg.set_property(
+        "caps",
+        Gst.Caps.from_string(
+            "image/jpeg, width=1920, height=1080, framerate=30/1"
+        )
+    )
+    caps_nvmm.set_property(
+        "caps",
+        Gst.Caps.from_string(
+            "video/x-raw(memory:NVMM), format=NV12"
+        )
+    )
+    caps_bgrx.set_property(
+        "caps",
+        Gst.Caps.from_string("video/x-raw, format=BGRx")
+    )
+
+    decoder.set_property("mjpeg", 1)
+
+    streammux.set_property("width", 1920)
+    streammux.set_property("height", 1080)
+    streammux.set_property("batch-size", 1)
+    streammux.set_property("batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC)
+
+    # ORIGINAL CONFIG
+    #pgie.set_property('config-file-path', "dstest1_pgie_config.txt")
+    pgie.set_property('config-file-path', "deepstream_rfdetr_bbox_config.txt")
     # Set sync = false to avoid late frame drops at the display-sink
-    sink.set_property('sync', False)
+    fpssink.set_property("video-sink", nv3d_sink)
+    fpssink.set_property("sync", False)
+    fpssink.set_property("text-overlay", True)
 
     print("Adding elements to Pipeline \n")
     pipeline.add(source)
-    pipeline.add(caps_v4l2src)
-    pipeline.add(vidconvsrc)
+    pipeline.add(caps_jpeg)
+    pipeline.add(jpegparse)
+    pipeline.add(decoder)
     pipeline.add(nvvidconvsrc)
-    pipeline.add(caps_vidconvsrc)
+    pipeline.add(caps_nvmm)
+    pipeline.add(queue)
     pipeline.add(streammux)
     pipeline.add(pgie)
-    pipeline.add(nvvidconv)
     pipeline.add(nvosd)
-    pipeline.add(sink)
+    pipeline.add(nvvidconv)
+    pipeline.add(caps_bgrx)
+    pipeline.add(fpssink)
+    pipeline.add(nv3d_sink)
 
     # we link the elements together
     # v4l2src -> nvvideoconvert -> mux -> 
     # nvinfer -> nvvideoconvert -> nvosd -> video-renderer
     print("Linking elements in the Pipeline \n")
-    source.link(caps_v4l2src)
-    caps_v4l2src.link(vidconvsrc)
-    vidconvsrc.link(nvvidconvsrc)
-    nvvidconvsrc.link(caps_vidconvsrc)
+    source.link(caps_jpeg)
+    caps_jpeg.link(jpegparse)
+    jpegparse.link(decoder)
+    decoder.link(nvvidconvsrc)
+    nvvidconvsrc.link(caps_nvmm)
+    caps_nvmm.link(queue)
 
-    sinkpad = streammux.request_pad_simple("sink_0")
+    sinkpad = streammux.request_pad_simple("sink_0")    
     if not sinkpad:
         sys.stderr.write(" Unable to get the sink pad of streammux \n")
-    srcpad = caps_vidconvsrc.get_static_pad("src")
+    srcpad = queue.get_static_pad("src")
     if not srcpad:
         sys.stderr.write(" Unable to get source pad of caps_vidconvsrc \n")
     srcpad.link(sinkpad)
+
     streammux.link(pgie)
-    pgie.link(nvvidconv)
-    nvvidconv.link(nvosd)
-    nvosd.link(sink)
+    pgie.link(nvosd)
+    nvosd.link(nvvidconv)
+    nvvidconv.link(caps_bgrx)
+    caps_bgrx.link(fpssink)
 
     # create an event loop and feed gstreamer bus mesages to it
     loop = GLib.MainLoop()
